@@ -1,0 +1,384 @@
+import pandas as pd
+pd.set_option('display.max_columns', None)  
+pd.set_option('display.expand_frame_repr', False)
+pd.set_option('max_colwidth', -1)
+import spacy
+nlp = spacy.load("en_core_web_sm")
+from spacy import displacy  
+from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
+from sklearn.pipeline import Pipeline, FeatureUnion
+from xgboost import XGBClassifier
+from sklearn.model_selection import train_test_split, GridSearchCV, cross_val_score, StratifiedKFold
+from sklearn.preprocessing import LabelEncoder
+from sklearn.svm import LinearSVC
+from sklearn.base import BaseEstimator, TransformerMixin
+import pandas as pd
+import nltk
+from nltk.corpus import wordnet
+from sklearn.metrics import classification_report
+from sklearn.model_selection import StratifiedKFold
+#nltk.download('wordnet')
+from tqdm import tqdm
+from imblearn.pipeline import make_pipeline, Pipeline
+from imblearn.over_sampling import SMOTE
+from imblearn.over_sampling import RandomOverSampler
+from imblearn.over_sampling import SVMSMOTE
+import nltk
+from nltk.stem import WordNetLemmatizer
+tqdm().pandas()
+
+
+
+train_fake = pd.read_excel("train_subset.xlsx")
+players = pd.read_csv("players.csv")
+train_real=pd.read_excel("CCC_TrainingData.xlsx")
+
+stop_words=["i","do","get","-999","ca" "me","sajda","it's","'","'s'", "my","do","ca", "myself", "we","'ll" "our","ks", "wo","ours", "ourselves","that's","you'll", "you", "your", "yours", "yourself", "yourselves", "he", "him", "his", "himself", "she", "her", "hers", "herself", "it", "its", "itself", "they", "them", "their", "theirs", "themselves", "what", "which", "who", "whom", "this", "that", "these", "those","s","yet","n't", "am", "is", "are", "was", "were", "be", "been", "being", "have", "has", "had", "having", "do", "does", "did", "doing", "a", "an", "the", "and", "but", "if", "or", "because", "as", "until", "while", "of", "at", "by", "for", "with", "about", "against", "into", "through", "during", "before", "to", "from", "up", "down", "in", "out", "on", "again", "further", "then", "once", "here", "there", "when", "where", "why", "how", "all", "any", "both", "each", "few", "more", "most", "other", "some", "such", "no", "nor", "own","'", "same", "so", "than", "too", "very", "'s", "t", "can", "will", "just", "don", "should", "now","india","another","pakistan","australia","kiwis","srilanka","england" ]
+
+player_names=players["Names"].tolist()
+
+
+def exclamation(row):
+    if re.search("!",row):
+        return 1
+    else:
+        return 0
+
+train_real["exclamation"]=train_real["Commentary"].apply(exclamation)
+
+run_rate=train_real.groupby(['Match_ID']).mean()
+
+
+train=run_rate.merge(train_real,on="Match_ID")
+
+train.drop(['ID_x','Over_x','ID_y','exclamation_x'],axis=1,inplace=True)
+train.head()
+
+train.rename(index=str, columns={"Over_Run_Total_x": "runrate", "Over_y": "Over","Over_Run_Total_y":"Over_Run_Total","exclamation_y":"exclamation"},inplace=True)
+
+train.head()
+
+def char_size(row):
+    return len(row)
+train["shape"]=train["Commentary"].apply(char_size)
+
+train['shape'][train["Target"]=="Dot"].mean()
+
+train['shape'][train["Target"]=="Run_Bw_Wickets"].mean()
+
+train['shape'][train["Target"]=="Wicket"].mean()
+
+train['shape'][train["Target"]=="Boundary"].mean()
+
+X=train.drop(labels=['Target'],axis=1)
+
+import re
+def remove_numbers(s):
+    s = re.sub(r"[^a-zA-Z' ']","",s)
+    return s
+X["Commentary"]=X["Commentary"].apply(remove_numbers)
+
+# temp=[]
+# def addname(row):
+#     row=row.lower()
+#     temp.append(row.split(" "))
+
+# players["Colin Cowdrey"].apply(addname)
+# player_names = [item for sublist in temp for item in sublist]
+
+# for i in range(0,len(player_names)):
+#       player_names[i]=player_names[i].replace("\xa0","")
+
+#adding count of player names used
+
+X["player_names_count"]=X["Commentary"].apply(lambda x: len([w for w in str(x).lower().split() if w in player_names]))
+
+X['Commentary']=X['Commentary'].apply(lambda x: ' '.join([word for word in x.split() if word not in (player_names)]))
+
+
+X['cleaned_words']=X['Commentary'].apply(lambda x: ' '.join([word for word in x.split(" ") if word not in (stop_words)]))
+
+
+wordnet_lemmatizer = WordNetLemmatizer()
+words=[]
+def lematizer(row):
+    sentence=''
+    sentence_words = nltk.word_tokenize(row)
+    words=[]
+    for word in sentence_words:
+        words.append(wordnet_lemmatizer.lemmatize(word,pos='v'))
+        sentence=' '.join(words)
+    return sentence
+        
+
+# for i in range(0,X.shape[0]):
+#       X.cleaned_words[i]=X.cleaned_words[i].replace("  "," ")/
+
+X['cleaned_words']=X['cleaned_words'].apply(lematizer)
+
+X['cleaned_words']=X['cleaned_words'].apply(lambda x: ' '.join([word for word in x.split(" ") if word not in (stop_words)]))
+
+
+#X['Over']=X['Over'].astype(int)
+
+X
+
+vec_tfidf = TfidfVectorizer()
+xgb=XGBClassifier(n_estimators=300)
+
+y=train['Target']
+
+class TextSelector(BaseEstimator, TransformerMixin):
+    """
+    Transformer to select a single column from the data frame to perform additional transformations on
+    Use on text columns in the data
+    """
+    def __init__(self, key):
+        self.key = key
+
+    def fit(self, X, y=None, *parg, **kwarg):
+        return self
+
+    def transform(self, X):
+        # returns the input as a string
+        return X[self.key]
+    
+class NumberSelector(BaseEstimator, TransformerMixin):
+    """
+    Transformer to select a single column from the data frame to perform additional transformations on
+    Use on numeric columns in the data
+    """
+    def __init__(self, key):
+        self.key = key
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X):
+        # returns the input as a dataframe
+        return X[[self.key]]
+
+text = Pipeline([
+                ('selector', TextSelector(key='cleaned_words')),
+                ('vectorizer', vec_tfidf)
+                ])
+
+shape = Pipeline([
+                ('selector', NumberSelector(key='shape'))
+                ])
+
+runrate = Pipeline([
+                ('selector', NumberSelector(key='runrate'))
+                ])
+exclamation = Pipeline([
+                ('selector', NumberSelector(key='exclamation'))
+                ])
+player_names_count = Pipeline([
+                ('selector', NumberSelector(key='player_names_count'))
+                ])
+Over = Pipeline([
+                ('selector', NumberSelector(key='Over'))
+                ])
+
+
+feats = FeatureUnion([('text', text),
+                      ('runrate',runrate),
+                      ('shape',shape),
+                      ('exclamation',exclamation),
+                      ('player_names_count',player_names_count),
+                      ('Over',Over)
+                      
+                      
+                      ])
+
+pipe=Pipeline([ 
+                ('feats',feats)
+])
+
+abc=pipe.fit_transform(X)
+
+label_encoder = LabelEncoder()
+label_encoder = label_encoder.fit(y)
+y = label_encoder.transform(y)
+
+y=pd.DataFrame(data=y)
+
+
+y_train.value_counts()
+
+X_train, X_test, y_train, y_test = train_test_split(abc,y,test_size=0.33, random_state=42, stratify=y)
+
+ros = RandomOverSampler({0:28000,3:28000})
+
+sm = SVMSMOTE({0:28000,3:28000})
+
+X_res, y_res = sm.fit_resample(X_train, y_train)
+
+X_res, y_res = ros.fit_resample(X_train, y_train)
+
+from bayes_opt import BayesianOptimization
+import xgboost as xgb
+from sklearn.metrics import mean_squared_error
+
+#X_train=pipe.fit_transform(X_train)
+
+#dtrain = xgb.DMatrix(X_train,y_train)
+dtrain = xgb.DMatrix(X_res,y_res)
+
+#Bayesian Optimization function for xgboost
+#specify the parameters you want to tune as keyword arguments
+def bo_tune_xgb(max_depth, gamma, n_estimators ,learning_rate):
+     params = {'max_depth': int(max_depth),
+              'gamma': gamma,
+              'n_estimators': int(n_estimators),
+              'learning_rate':learning_rate,
+              'subsample': 0.8,
+              'eta': 0.1,
+              'eval_metric': 'rmse'}
+#Cross validating with the specified parameters in 5 folds and 70 iterations
+     cv_result = xgb.cv(params, dtrain, num_boost_round=70, nfold=5)
+    #Return the negative RMSE
+     return -1.0 * cv_result['test-rmse-mean'].iloc[-1]
+
+#Invoking the Bayesian Optimizer with the specified parameters to tune
+xgb_bo = BayesianOptimization(bo_tune_xgb, {'max_depth': (3, 10), 
+                                             'gamma': (0, 1),
+                                             'learning_rate':(0,1),
+                                             'n_estimators':(350,400)
+                                            })
+
+
+
+#performing Bayesian optimization for 5 iterations with 8 steps of random exploration with an #acquisition function of expected improvement
+xgb_bo.maximize(n_iter=5, init_points=8, acq='ei')
+
+#Extracting the best parameters ***NEW with 3 features
+params = xgb_bo.max['params']
+print(params)
+
+# #Extracting the best parameters
+# params = xgb_bo.max['params']
+# print(params)
+
+#Converting the max_depth and n_estimator values from float to int ** old with `1 feature
+params['max_depth']= int(params['max_depth'])
+params['n_estimators']= int(params['n_estimators'])
+
+#Initialize an XGBClassifier with the tuned parameters and fit the training data
+from xgboost import XGBClassifier
+classifier2 = XGBClassifier(**params).fit(X_res, y_res)
+
+#new with exclamation+ shape+ runrate+ player_names+ over + 20k sample increase SMOTESVM
+y_pred= classifier2.predict(X_test) 
+
+#Looking at the classification report
+print(classification_report(y_pred,y_test))
+
+#new with exclamation+ shape+ runrate+ player_names+ over + 20k sample increase
+y_pred= classifier2.predict(X_test) 
+
+#Looking at the classification report
+print(classification_report(y_pred,y_test))
+
+#new with exclamation+ shape+ runrate+ player_names+ over + 14k sample
+y_pred= classifier2.predict(X_test) 
+
+#Looking at the classification report
+print(classification_report(y_pred,y_test))
+
+#new with exclamation+shape+capital+player_names
+y_pred= classifier2.predict(X_test)
+
+#Looking at the classification report
+print(classification_report(y_pred,y_test))
+
+#new with exclamation+shape+capital
+y_pred= classifier2.predict(X_test)
+
+#Looking at the classification report
+print(classification_report(y_pred,y_test))
+
+#predicting for training set
+# X_test_new=pipe.transform(X_test)
+# dtrain = xgb.DMatrix(X_test_new,y_test)
+y_pred= classifier2.predict(X_test)
+
+#Looking at the classification report
+print(classification_report(y_pred,y_test))
+
+#predicting for training set
+# X_test_new=pipe.transform(X_test)
+# dtrain = xgb.DMatrix(X_test_new,y_test)
+y_pred= classifier2.predict(X_test)
+
+#Looking at the classification report
+print(classification_report(y_pred,y_test))
+
+
+
+y_pred=pipe.predict(X_test)
+print(classification_report(y_pred,y_test))
+
+
+param_grid = {
+                'xgb__n_estimators': [300]
+    
+                #'scale_pos_weight':[1,2]
+}
+
+grid_search = GridSearchCV(estimator = pipe, param_grid = param_grid, 
+                          cv = 3, n_jobs = -1, verbose = 0, return_train_score=True)
+
+grid_search.fit(X_train,y_train)
+
+y_pred=grid_search.predict(X_test)
+print(classification_report(y_pred,y_test))
+
+
+list_of_players=pd.DataFrame(data=player_names)
+list_of_players.to_csv("players.csv")
+
+text1="sharp catch by bravo at first slip. it was tossed up outside off, turned in a bit and bounced a little. rainsford goes for a cut and is beaten by the extra bounce. it darted to the left of bravo who pouches it smartly"
+
+
+train_fake["count"]=train_fake["Commentary"].apply(lambda x: len([w for w in str(x).lower().split() if w in player_names]))
+
+
+train_fake.to_csv("check.csv")
+
+### LDA model
+
+from bayes_opt import BayesianOptimization
+
+
+
+
+import gensim
+from gensim.utils import simple_preprocess
+from gensim.parsing.preprocessing import STOPWORDS
+from gensim import corpora, models
+
+
+
+def list_creator(string):
+    templist = string.split(",")
+    final_list = []
+    for word in templist:
+        final_list.append(word.strip())
+    return final_list
+
+
+X['topic'] = X["cleaned_words"].apply(list_creator)
+
+dictionary = gensim.corpora.Dictionary(X['topic'])
+
+corpus = [dictionary.doc2bow(doc) for doc in X['topic']]
+
+
+lda_model = gensim.models.LdaMulticore(corpus, num_topics=4, id2word=dictionary, passes=2, workers=2)
+
+
+import pyLDAvis.gensim
+pyLDAvis.enable_notebook()
+
+pyLDAvis.gensim.prepare(lda_model,corpus,dictionary) 
