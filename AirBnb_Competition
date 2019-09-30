@@ -1,0 +1,541 @@
+import pandas as pd
+import pandas_profiling
+import numpy as np
+%matplotlib inline
+import matplotlib.pyplot as plt 
+import seaborn as sns
+color = sns.color_palette()
+sns.set_style('darkgrid')
+import warnings
+from scipy import stats
+from scipy.stats import norm, skew
+import nltk
+from sklearn.cluster import DBSCAN
+from math import radians, cos, sin, asin, sqrt
+from geopy.distance import great_circle
+from scipy.spatial.distance import pdist, squareform
+from sklearn.model_selection import train_test_split
+from xgboost.sklearn import XGBRegressor
+from sklearn.model_selection import GridSearchCV
+from datetime import datetime, timedelta 
+
+
+
+train=pd.read_csv("train.csv")
+test=pd.read_csv("test.csv")
+
+pd.options.display.max_columns = None 
+
+train.drop("id", axis=1, inplace=True)
+test.drop("id", axis=1, inplace=True)
+
+
+train['dataset']="train"
+test["dataset"]="test"
+
+data=pd.concat([train,test],axis=0)
+
+data['log_price']=data['log_price'].fillna(0)
+
+sns.distplot(data['log_price'], kde=True, rug=True)
+
+
+sns.distplot(data['beds'], kde=True, rug=True)
+
+
+data=data.drop(data[(data['log_price']<2) & (data['dataset']=="train")].index)
+
+data['host_response_rate']=data['host_response_rate'].fillna(data['host_response_rate'].mean)
+
+data['host_response_rate'].isna().sum()
+data['host_since'].isna().sum()
+
+data['host_since']=data['host_since'].fillna(data['first_review'])
+
+data['host_since']=data['host_since'].fillna(10/4/2017)
+
+data["host_since"] = pd.to_datetime(data["host_since"])
+
+today = datetime.today()
+data['estb_since']= today - data['host_since']
+
+data['estb_since']=data['estb_since']/np.timedelta64(1,'D')
+
+data['estb_since']=data['estb_since'].astype(int)
+
+data['review_scores_rating']=data['review_scores_rating'].fillna(data['review_scores_rating'].mean)
+
+#data['estb_since']=pd.to_numeric(data['estb_since'])
+data['estb_since']=data['estb_since'].datetime.strip(data['estb_since'], "%Y-%m-%d").date()
+    
+
+data['bathrooms'] = data['bathrooms'].fillna(0)
+
+
+data['bedrooms']= data['bedrooms'].fillna(data['accommodates']/2)
+
+data['beds']= data['beds'].fillna(data['bedrooms'])
+
+data["host_has_profile_pic"]=data['host_has_profile_pic'].fillna("f")
+
+data["host_identity_verified"]=data['host_identity_verified'].fillna("f")
+
+data["host_since"]=data['host_since'].fillna(data['host_since'].median)
+
+
+data['thumbnail_url']=data['thumbnail_url'].fillna(0)
+
+def thumb(i):
+    
+    i=str(i)
+    if "https" in i:
+        return 1
+    else :
+        return 0
+
+
+data['thumbnail_url_fixed']=data['thumbnail_url'].apply(thumb)
+
+data["amenities"]=data["amenities"].str.lstrip("{")
+
+data["amenities"]=data["amenities"].str.rstrip("}")
+
+data["amenities"]=data["amenities"].str.lstrip('"')
+
+data["amenities"]=data["amenities"].str.rstrip('"')
+
+data["amenities"].replace('"', '', regex=True,inplace=True)
+
+
+data["amenities_expand"]=data["amenities"].str.split(",")
+
+data["amenities"]=data["amenities"].str.strip()
+
+#data["amenities_expand"]=data["amenities_expand"].str.strip()
+
+data
+
+
+
+
+
+
+
+
+
+data.head()
+
+temp = []
+def myls(String):
+    for item in String:
+        temp.append(item)
+    #return set(temp)
+    
+
+data["amenities_words"]=data["amenities_expand"].apply(myls)
+
+all_amenities=['24-hour check-in',
+ 'Air conditioning', 
+ 'BBQ grill',
+ 'Babysitter recommendations', 
+ 'Bathtub',
+ 'Bed linens', 
+ 'Breakfast',
+ 'Buzzer/wireless intercom',
+ 'Cable TV',
+ 'Carbon monoxide detector',
+ 'Cat(s)',
+ 'Children’s books and toys',
+ 'Coffee maker',
+ 'Cooking basics',
+ 'Dishes and silverware',
+ 'Dishwasher',
+ 'Dog(s)',
+ 'Doorman',
+ 'Dryer',
+ 'Elevator',
+ 'Elevator in building',
+ 'Essentials',
+ 'Ethernet connection',
+ 'Extra pillows and blankets',
+ 'Family/kid friendly',
+ 'Fire extinguisher',
+ 'First aid kit',
+ 'Free parking on premises',
+ 'Game console',
+ 'Garden or backyard',
+ 'Gym',
+ 'Hair dryer',
+ 'Heating',
+ 'Host greets you',
+ 'Indoor fireplace',
+ 'Internet',
+ 'Iron',
+ 'Keypad',
+ 'Kitchen',
+ 'Laptop friendly workspace',
+ 'Lock on bedroom door',
+ 'Lockbox',
+ 'Long term stays allowed',
+ 'Luggage dropoff allowed',
+ 'Microwave',
+ 'Oven',
+ 'Pack ’n Play/travel crib',
+ 'Patio or balcony',
+ 'Pets allowed',
+ 'Pets live on this property',
+ 'Pool',
+ 'Private entrance',
+ 'Private living room',
+ 'Refrigerator',
+ 'Room-darkening shades',
+ 'Safety card',
+ 'Self Check-In',
+ 'Shampoo',
+ 'Smart lock',
+ 'Smoke detector',
+ 'Smoking allowed',
+ 'Step-free access',
+ 'Suitable for events',
+ 'TV',
+ 'Washer',
+ 'Well-lit path to entrance',
+ 'Wheelchair accessible',
+ 'Wide doorway',
+ 'Wireless Internet']
+
+final_amenities=['24-hour check-in',
+ 'Air conditioning', 
+ 'BBQ grill',
+ 'Babysitter recommendations', 
+ 'Bathtub',
+ 'Bed linens', 
+ 'Breakfast',
+ 'Buzzer/wireless intercom',
+ 'Cable TV',
+ 'Carbon monoxide detector',
+ 'Cat(s)',
+ 'Children’s books and toys',
+ 'Coffee maker',
+ 'Cooking basics',
+ 'Dishes and silverware',
+ 'Dishwasher',
+ 'Dog(s)',
+ 'Doorman',
+ 'Dryer',
+ 'Elevator',
+ 'Elevator in building',
+ 'Essentials',
+ 'Ethernet connection',
+ 'Extra pillows and blankets',
+ 'Family/kid friendly',
+ 'Fire extinguisher',
+ 'First aid kit',
+ 'Free parking on premises',
+ 'Game console',
+ 'Garden or backyard',
+ 'Gym',
+ 'Hair dryer',
+ 'Heating',
+ 'Host greets you',
+ 'Indoor fireplace',
+ 'Internet',
+ 'Iron',
+ 'Keypad',
+ 'Kitchen',
+ 'Laptop friendly workspace',
+ 'Lock on bedroom door',
+ 'Lockbox',
+ 'Long term stays allowed',
+ 'Luggage dropoff allowed',
+ 'Microwave',
+ 'Oven',
+ 'Pack ’n Play/travel crib',
+ 'Patio or balcony',
+ 'Pets allowed',
+ 'Pets live on this property',
+ 'Pool',
+ 'Private entrance',
+ 'Private living room',
+ 'Refrigerator',
+ 'Room-darkening shades',
+ 'Safety card',
+ 'Self Check-In',
+ 'Shampoo',
+ 'Smart lock',
+ 'Smoke detector',
+ 'Smoking allowed',
+ 'Step-free access',
+ 'Suitable for events',
+ 'TV',
+ 'Washer',
+ 'Well-lit path to entrance',
+ 'Wheelchair accessible',
+ 'Wide doorway',
+ 'Wireless Internet']
+
+word_count=()
+a=[]
+b=[]
+for i in all_amenities:
+    
+    word_count= temp.count(i),i
+    a=list(word_count)
+    b.append(a)
+    
+    
+
+b.sort(reverse=True)
+
+
+def amen_features():
+    j-1
+    for i in final_amenities:
+        if i in row:
+            j-1
+            break
+        else:
+            j=0
+    return j
+
+data['common_amenities']=data['amenities'].apply(common_amenities)
+
+
+for i in final_amenities:
+    data[i]=0
+    
+
+data.head()
+
+data.columns=['accommodates', 'amenities', 'bathrooms', 'bed_type', 'bedrooms',
+       'beds', 'cancellation_policy', 'city', 'cleaning_fee', 'dataset',
+       'description', 'first_review', 'host_has_profile_pic',
+       'host_identity_verified', 'host_response_rate', 'host_since',
+       'instant_bookable', 'last_review', 'latitude', 'log_price', 'longitude',
+       'name', 'neighbourhood', 'number_of_reviews', 'property_type',
+       'review_scores_rating', 'room_type', 'thumbnail_url', 'zipcode',
+       'estb_since', 'thumbnail_url_fixed', 'amenities_expand',
+       'amenities_words','24-hour check-in', 'Air conditioning',  'BBQ grill',
+ 'Babysitter recommendations', 
+ 'Bathtub',
+ 'Bed linens', 
+ 'Breakfast',
+ 'Buzzer/wireless intercom',
+ 'Cable TV',
+ 'Carbon monoxide detector',
+ 'Cat(s)',
+ 'Children’s books and toys',
+ 'Coffee maker',
+ 'Cooking basics',
+ 'Dishes and silverware',
+ 'Dishwasher',
+ 'Dog(s)',
+ 'Doorman',
+ 'Dryer',
+ 'Elevator',
+ 'Elevator in building',
+ 'Essentials',
+ 'Ethernet connection',
+ 'Extra pillows and blankets',
+ 'Family/kid friendly',
+ 'Fire extinguisher',
+ 'First aid kit',
+ 'Free parking on premises',
+ 'Game console',
+ 'Garden or backyard',
+ 'Gym',
+ 'Hair dryer',
+ 'Heating',
+ 'Host greets you',
+ 'Indoor fireplace',
+ 'Internet',
+ 'Iron',
+ 'Keypad',
+ 'Kitchen',
+ 'Laptop friendly workspace',
+ 'Lock on bedroom door',
+ 'Lockbox',
+ 'Long term stays allowed',
+ 'Luggage dropoff allowed',
+ 'Microwave',
+ 'Oven',
+ 'Pack ’n Play/travel crib',
+ 'Patio or balcony',
+ 'Pets allowed',
+ 'Pets live on this property',
+ 'Pool',
+ 'Private entrance',
+ 'Private living room',
+ 'Refrigerator',
+ 'Room-darkening shades',
+ 'Safety card',
+ 'Self Check-In',
+ 'Shampoo',
+ 'Smart lock',
+ 'Smoke detector',
+ 'Smoking allowed',
+ 'Step-free access',
+ 'Suitable for events',
+ 'TV',
+ 'Washer',
+ 'Well-lit path to entrance',
+ 'Wheelchair accessible',
+ 'Wide doorway',
+ 'Wireless Internet']
+
+# df=pd.DataFrame(b)
+# df1=df[:24]
+# df2=df[25:54]
+# df3=df[55:127]
+
+# common_amen=list(df1[1])
+# medium_amen=list(df2[1])
+# rare_amen=list(df3[1])
+# common_amen
+
+
+# def common_amenities(row):
+#     j=1
+#     for i in common_amen:
+#         if i in row:
+#             j=1
+#             break
+#         else:
+#             j=0
+#     return j          
+
+# data['common_amenities']=data['amenities'].apply(common_amenities)
+
+# def medium_amenities(row):
+#     j=1
+#     for i in medium_amen:
+#         if i in row:
+#             j=1
+#             break
+#         else:
+#             j=0
+#     return j        
+                
+
+# data['medium_amenities']=data['amenities'].apply(medium_amenities)
+
+# def rare_amenities(row):
+#     j=1
+#     for i in rare_amen:
+#         if i in row:
+#             j=1
+#             break
+#         else:
+#             j=0
+#     return j        
+
+# data['rare_amenities']=data['amenities'].apply(rare_amenities)
+
+import plotly as py
+plotly.tools.set_credentials_file(username='devenrana', api_key='lQffw5uKbPQQaFLynITp')
+import plotly.graph_objs as go
+
+trace=go.Bar(x=df[1],y=df[0])
+data=[trace]
+py.plotly.iplot(data)
+
+X=data[['latitude','longitude']]
+
+coords = X.as_matrix(columns=['latitude', 'longitude'])
+
+kms_per_radian = 6371.0088
+epsilon = 1.5 / kms_per_radian
+db = DBSCAN(eps=epsilon, min_samples=1, algorithm='ball_tree', metric='haversine').fit(np.radians(coords))
+cluster_labels = db.labels_
+num_clusters = len(set(cluster_labels))
+
+
+clusters = pd.Series([coords[cluster_labels == n] for n in range(num_clusters)])
+print('Number of clusters: {}'.format(num_clusters))
+
+data["location_clusters"]=db.labels_
+
+clusters[10]
+
+data.head()
+
+data_final=data[["accommodates","bathrooms","bed_type","bedrooms","beds","cancellation_policy","city","cleaning_fee","host_has_profile_pic","host_identity_verified","instant_bookable","property_type","room_type","thumbnail_url_fixed","common_amenities","medium_amenities","rare_amenities","location_clusters","dataset"]]
+
+data_final.info()
+
+
+data_final["location_clusters"]=data_final['location_clusters'].astype(str)
+data_final["cleaning_fee"]=data_final['cleaning_fee'].astype(int)
+#data_final["thumbnail_url_fixed"]=str(data_final['thumbnail_url_fixed'])
+
+pd.get_dummies(data_final).shape
+
+data_final=pd.get_dummies(data_final,drop_first=True)
+
+data_final
+
+y=data['log_price'][data['dataset']=='train']
+
+X=data_final[data_final['dataset_train']==1]
+
+X.drop(['dataset_train'],axis=1,inplace=True)
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=42)
+
+param_grid_svc={ 
+        'n_estimators': [50, 100, 150, 200, 250, 300, 350, 400, 450, 500],
+        'max_depth': [2, 4, 6, 8],
+        'learning_rate': [0.1, 0.01, 0.001] 
+}
+
+param_test1 = {
+ 'max_depth':range(3,10,2),
+ 'min_child_weight':range(1,6,2)
+}
+
+gsearch1 = GridSearchCV(estimator = XGBClassifier( learning_rate =0.1, n_estimators=140, max_depth=5,
+ min_child_weight=1, gamma=0, subsample=0.8, colsample_bytree=0.8,
+ objective= 'binary:logistic', nthread=4, scale_pos_weight=1, seed=27), 
+ param_grid = param_test1, scoring='roc_auc',n_jobs=4,iid=False, cv=5)
+
+xgb = XGBClassifier(
+ learning_rate =0.1,
+ n_estimators=1000,
+ max_depth=5,
+ min_child_weight=1,
+ gamma=0,
+ subsample=0.8,
+ colsample_bytree=0.8,
+ objective= 'binary:logistic',
+ nthread=4,
+ scale_pos_weight=1,
+ seed=27)
+
+xgb.fit(X_train,y_train)
+
+xgb.score(X_train,y_train)
+
+xgb.score(X_test,y_test)
+
+from sklearn.metrics import mean_squared_error
+
+predictions= xgb.predict(X_test)
+
+mean_sq_err=mean_squared_error(y_test,predictions)
+
+np.sqrt(mean_sq_err)
+
+data_final
+
+#corr=data_final.corr()
+
+# ax = sns.heatmap(
+#     corr, 
+#     vmin=-1, vmax=1, center=0,
+#     cmap=sns.diverging_palette(20, 220, n=200),
+#     square=True
+# )
+# ax.set_xticklabels(
+#     ax.get_xticklabels(),
+#     rotation=45,
+#     horizontalalignment='right')
